@@ -1,0 +1,166 @@
+From 95b44063faa617b3cf9e56f1d4d183882517998c Mon Sep 17 00:00:00 2001
+From: evanchen-ubuntu-system <evanchen@ami.com>
+Date: Thu, 6 Feb 2025 10:37:10 +0800
+Subject: [PATCH] add new api /v1/GetSensorInfo
+
+---
+ .../include/registries/privilege_registry.hpp |  4 ++
+ redfish-core/lib/example.hpp                  | 20 +++++++
+ redfish-core/lib/sensors.hpp                  | 59 +++++++++++++++++++
+ redfish-core/src/redfish.cpp                  |  3 +
+ 4 files changed, 86 insertions(+)
+ create mode 100644 redfish-core/lib/example.hpp
+
+diff --git a/redfish-core/include/registries/privilege_registry.hpp b/redfish-core/include/registries/privilege_registry.hpp
+index 47de7f15..db1a00a4 100644
+--- a/redfish-core/include/registries/privilege_registry.hpp
++++ b/redfish-core/include/registries/privilege_registry.hpp
+@@ -1625,6 +1625,7 @@ const static auto& patchSensor = privilegeSetConfigureComponents;
+ const static auto& postSensor = privilegeSetConfigureComponents;
+ const static auto& putSensor = privilegeSetConfigureComponents;
+ const static auto& deleteSensor = privilegeSetConfigureComponents;
++const static auto& getSensorInfo = privilegeSetLogin;
+ 
+ // SensorCollection
+ const static auto& getSensorCollection = privilegeSetLogin;
+@@ -2020,5 +2021,8 @@ const static auto& getLicenseControl = privilegeSetLogin;
+ const static auto& patchLicenseControl = privilegeSetConfigureComponents;
+ const static auto& postLicenseControl = privilegeSetConfigureComponents;
+ 
++//GetExample
++const static auto& getExample = privilegeSetLogin;
++
+ } // namespace redfish::privileges
+ // clang-format on
+diff --git a/redfish-core/lib/example.hpp b/redfish-core/lib/example.hpp
+new file mode 100644
+index 00000000..f3bf984e
+--- /dev/null
++++ b/redfish-core/lib/example.hpp
+@@ -0,0 +1,20 @@
++#pragma once
++
++// minimal include header
++#include <app.hpp>
++
++namespace redfish
++{
++    inline void handleExampleGet(App& , const crow::Request&, const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++    {
++        asyncResp->res.jsonValue["Hello"] = "World!!!";
++    }
++
++    inline void requestRoutesExample(App& app)
++    {
++        BMCWEB_ROUTE(app, "/redfish/v1/Example")
++            .privileges(redfish::privileges::getExample)
++            .methods(boost::beast::http::verb::get)
++            (std::bind_front(handleExampleGet, std::ref(app)));
++    }
++}
+\ No newline at end of file
+diff --git a/redfish-core/lib/sensors.hpp b/redfish-core/lib/sensors.hpp
+index 17544744..6a2a3c6c 100644
+--- a/redfish-core/lib/sensors.hpp
++++ b/redfish-core/lib/sensors.hpp
+@@ -3406,6 +3406,57 @@ inline void handleSensorGet(App& app, const crow::Request& req,
+         "xyz.openbmc_project.Inventory.Item.Chassis"});
+ }
+ 
++/* My Function */
++inline void handleSensorGetInfo(App& app, const crow::Request& req,
++                                const std::shared_ptr<bmcweb::AsyncResp>& asyncResp)
++{
++    if (!redfish::setUpRedfishRoute(app, req, asyncResp))
++    {
++        return;
++    }
++
++    // Call the GetSubTreePaths interface of "ObjectMapper" to retrieve object paths under '/xyz/openbmc_project/sensors'
++    // Retrieve all object paths that implement "xyz.openbmc_project.Sensor.Value"
++    crow::connections::systemBus->async_method_call(
++        [asyncResp](const boost::system::error_code ec,
++                    const std::vector<std::string>& sensorPaths) 
++        {
++            if (ec)
++            {
++                BMCWEB_LOG_ERROR("D-Bus call error: " , ec) ;
++                messages::internalError(asyncResp->res);
++                return;
++            }
++
++            // An array used to store the names of all sensors
++            nlohmann::json sensorNames = nlohmann::json::array();
++
++            for (const auto& path : sensorPaths)
++            {
++                // Extract the last segment as the sensor name
++                std::size_t pos = path.rfind('/');
++                if (pos != std::string::npos && (pos + 1 < path.size()))
++                {
++                    std::string sensorName = path.substr(pos + 1);
++                    sensorNames.push_back(sensorName);
++                }
++            }
++
++            // Write the result to JSON
++            asyncResp->res.jsonValue["@odata.type"] = "#SensorInfo.v1_0_0.SensorNameInfo_MyFunction";
++            asyncResp->res.jsonValue["@odata.id"]   = "/redfish/v1/GetSensorInfo";
++            asyncResp->res.jsonValue["Name"]        = "Sensor Name Info List";
++            asyncResp->res.jsonValue["SensorNames"] = std::move(sensorNames);
++        },
++        "xyz.openbmc_project.ObjectMapper",
++        "/xyz/openbmc_project/object_mapper",
++        "xyz.openbmc_project.ObjectMapper", "GetSubTreePaths",
++        "/xyz/openbmc_project/sensors",  // recursive search starting point
++        0,                               // depth
++        std::array<const char*, 1>{"xyz.openbmc_project.Sensor.Value"}
++    );
++}
++
+ inline void handleSensorHistoryGet(
+     App& app, const crow::Request& req,
+     const std::shared_ptr<bmcweb::AsyncResp>& asyncResp,
+@@ -3649,6 +3700,14 @@ inline void requestRoutesSensor(App& app)
+             std::bind_front(sensors::handleSensorGet, std::ref(app)));
+ }
+ 
++inline void requestRoutesSensorInfo(App& app)
++{
++    BMCWEB_ROUTE(app, "/redfish/v1/GetSensorInfo")
++        .privileges(redfish::privileges::getSensorInfo)
++        .methods(boost::beast::http::verb::get)(
++            std::bind_front(sensors::handleSensorGetInfo, std::ref(app)));
++}
++
+ inline void requestRoutesSensorHistory(App& app)
+ {
+     BMCWEB_ROUTE(app,
+diff --git a/redfish-core/src/redfish.cpp b/redfish-core/src/redfish.cpp
+index 8bc5e8ea..f1b1427f 100644
+--- a/redfish-core/src/redfish.cpp
++++ b/redfish-core/src/redfish.cpp
+@@ -64,6 +64,7 @@
+ #include "trigger.hpp"
+ #include "update_service.hpp"
+ #include "virtual_media.hpp"
++#include "example.hpp"
+ 
+ #if BMCWEB_AMI_RAIDBRCM_MACRO
+ #include "redfish-core/lib/ext/brcm/storage_brcm.hpp"
+@@ -124,6 +125,7 @@ RedfishService::RedfishService(App& app)
+     requestRoutesNodeManagerPolicies(app);
+     requestRoutesNodeManagerThrottlingStatus(app);
+     requestRoutesNodeManagerTriggers(app);
++    requestRoutesExample(app);
+ 
+     requestAccountServiceRoutes(app);
+     if constexpr (BMCWEB_REDFISH_AGGREGATION)
+@@ -349,6 +351,7 @@ RedfishService::RedfishService(App& app)
+ 
+     requestRoutesSensorCollection(app);
+     requestRoutesSensor(app);
++    requestRoutesSensorInfo(app);
+     requestRoutesSensorPatching(app);
+     requestRoutesSensorHistory(app);
+ 

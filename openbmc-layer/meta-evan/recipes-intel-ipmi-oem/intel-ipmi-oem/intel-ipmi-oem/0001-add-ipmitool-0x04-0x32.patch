@@ -1,0 +1,85 @@
+From e06075c946e6e9c91168e919ee7d5b972073a8a9 Mon Sep 17 00:00:00 2001
+From: evanchen-ubuntu-system <evanchen@ami.com>
+Date: Wed, 5 Feb 2025 18:15:57 +0800
+Subject: [PATCH] add ipmitool 0x04 0x32
+
+---
+ include/sensorcommands.hpp |  1 +
+ ipmi-allowlist.conf        |  1 +
+ src/sensorcommands.cpp     | 33 +++++++++++++++++++++++++++++++++
+ 3 files changed, 35 insertions(+)
+
+diff --git a/include/sensorcommands.hpp b/include/sensorcommands.hpp
+index 0fcd081..07978c9 100644
+--- a/include/sensorcommands.hpp
++++ b/include/sensorcommands.hpp
+@@ -183,6 +183,7 @@ enum class IPMINetfnSensorCmds : ipmi_cmd_t
+     ipmiCmdGetSensorReading = 0x2D,
+     ipmiCmdGetSensorType = 0x2F,
+     ipmiCmdSetSensorReadingAndEventStatus = 0x30,
++    ipmiCmdGetActiveSensorCount = 0x31, // New Command
+ };
+ 
+ namespace ipmi
+diff --git a/ipmi-allowlist.conf b/ipmi-allowlist.conf
+index 345d610..83ef52c 100644
+--- a/ipmi-allowlist.conf
++++ b/ipmi-allowlist.conf
+@@ -37,6 +37,7 @@
+ 0x04:0x2e:0x7f7f   //<Sensor/Event>:<Get Sensor Type>
+ 0x04:0x2f:0xff7f   //<Sensor/Event>:<Get Sensor Type>
+ 0x04:0x30:0x7f7f   //<Sensor/Event>:<Set Sensor Reading and Event Status>
++0x04:0x31:0x7f7f   //<Sensor/Event>:<Get Acting Sensor Count> (Test Functionality)
+ 0x06:0x01:0xffff   //<App>:<Get Device ID>
+ 0x06:0x02:0x7f7f   //<App>:<Cold Reset>
+ 0x06:0x03:0x7f7f   //<App>:<Warm Reset>
+diff --git a/src/sensorcommands.cpp b/src/sensorcommands.cpp
+index d5860a3..9280a4d 100644
+--- a/src/sensorcommands.cpp
++++ b/src/sensorcommands.cpp
+@@ -2697,6 +2697,34 @@ ipmi::RspType<> ipmiPefSetConfParamCmd(uint8_t ParamSelector,
+     return ipmi::responseSuccess();
+ }
+ 
++/* My Function */
++ipmi::RspType<uint8_t> ipmiGetActiveSensorCount([[maybe_unused]]ipmi::Context::ptr ctx)
++{
++    lg2::info("Get Active Sensor Count command invoked.");
++
++    uint8_t activeSensorCount = 0;
++
++    try
++    {
++        // 遍历传感器树并统计活动传感器数量
++        for (const auto& sensor : ipmi::sensorTree)
++        {
++            if (!sensor.first.empty()) // 假设非空路径表示活动
++            {
++                activeSensorCount++;
++            }
++        }
++    }
++    catch (const std::exception& e)
++    {
++        lg2::error("Failed to retrieve active sensor count: {ERROR}", "ERROR", e.what());
++        return ipmi::responseUnspecifiedError();
++    }
++
++    lg2::info("Active Sensor Count: {COUNT}", "COUNT", activeSensorCount);
++    return ipmi::responseSuccess(activeSensorCount);
++}
++
+ /* end sensor commands */
+ 
+ /* storage commands */
+@@ -3028,5 +3056,10 @@ void registerSensorFunctions()
+                           ipmi::storage::cmdGetSdrRepositoryTime,
+                           ipmi::Privilege::User,
+                           ipmiStorageGetSDRRepositoryTime);
++    
++    ipmi::registerHandler(ipmi::prioOemBase, ipmi::netFnSensor,       // NetFn
++                          ipmi::sensor_event::cmdGetActiveSensorCount, 
++                          ipmi::Privilege::User,
++                          ipmiGetActiveSensorCount);
+ }
+ } // namespace ipmi
